@@ -1,0 +1,19 @@
+{
+  "name": "cf-ytdlp-downloader",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.3.7"
+  },
+  "devDependencies": {
+    "wrangler": "^4.131.2"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

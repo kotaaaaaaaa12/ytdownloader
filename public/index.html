@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Media Downloader</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="card">
+      <div class="eyebrow">yt-dlp + Cloudflare Containers</div>
+      <h1>Media Downloader</h1>
+      <p class="sub">For media you own or have permission to download.</p>
+
+      <label class="field">
+        <span>URL</span>
+        <div class="urlrow">
+          <input id="url" type="url" placeholder="https://www.youtube.com/watch?v=..." autocomplete="off">
+          <button id="load" class="secondary">Load</button>
+        </div>
+      </label>
+
+      <div id="media" class="media hidden">
+        <img id="thumb" alt="">
+        <div>
+          <strong id="title"></strong>
+          <span id="meta"></span>
+        </div>
+      </div>
+
+      <div class="grid">
+        <label class="field">
+          <span>Mode</span>
+          <select id="mode">
+            <option value="av">Video + Audio</option>
+            <option value="video">Video only</option>
+            <option value="audio">Audio only</option>
+          </select>
+        </label>
+
+        <label class="field" id="qualityField">
+          <span>Quality</span>
+          <select id="quality"><option value="">Load a URL first</option></select>
+        </label>
+
+        <label class="field" id="containerField">
+          <span>Output</span>
+          <select id="container">
+            <option value="mp4">MP4</option>
+            <option value="mov">MOV</option>
+          </select>
+        </label>
+      </div>
+
+      <label class="toggle" id="iosField">
+        <input id="ios" type="checkbox" checked>
+        <span>iOS compatible</span>
+      </label>
+
+      <button id="download" class="primary" disabled>Download</button>
+
+      <div id="status" class="status hidden">
+        <div class="statusTop"><span id="statusText">Working…</span><span id="statusDetail"></span></div>
+        <div class="bar"><div id="barFill"></div></div>
+      </div>
+
+      <a id="fileLink" class="file hidden">Download finished file</a>
+      <pre id="error" class="error hidden"></pre>
+    </section>
+  </main>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

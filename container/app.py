@@ -1,0 +1,267 @@
+import asyncio
+import json
+import os
+import re
+import shutil
+import subprocess
+import threading
+import time
+import uuid
+from pathlib import Path
+from typing import Literal
+from urllib.parse import quote
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel, HttpUrl
+
+app = FastAPI(docs_url=None, redoc_url=None)
+ROOT = Path("/data/jobs")
+ROOT.mkdir(parents=True, exist_ok=True)
+JOBS: dict[str, dict] = {}
+LOCK = threading.Lock()
+MAX_AGE_SECONDS = 30 * 60
+
+
+def cleanup_old_jobs():
+    now = time.time()
+    with LOCK:
+        stale = [job_id for job_id, job in JOBS.items() if now - job.get("created", now) > MAX_AGE_SECONDS]
+    for job_id in stale:
+        path = ROOT / job_id
+        shutil.rmtree(path, ignore_errors=True)
+        with LOCK:
+            JOBS.pop(job_id, None)
+
+
+def run_json(cmd: list[str]) -> dict:
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=90)
+    if proc.returncode != 0:
+        message = (proc.stderr or proc.stdout).strip()
+        raise RuntimeError(message[-5000:])
+    return json.loads(proc.stdout)
+
+
+def base_ydl_args() -> list[str]:
+    return [
+        "yt-dlp",
+        "--no-playlist",
+        "--no-warnings",
+        "--js-runtimes",
+        "deno",
+    ]
+
+
+def sanitize_title(value: str) -> str:
+    value = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", value).strip()
+    return value[:160] or "download"
+
+
+class InfoRequest(BaseModel):
+    url: HttpUrl
+
+
+class DownloadRequest(BaseModel):
+    url: HttpUrl
+    mode: Literal["av", "video", "audio"] = "av"
+    height: int | None = None
+    container: Literal["mp4", "mov"] = "mp4"
+    ios_compatible: bool = True
+
+
+@app.get("/api/health")
+def health():
+    cleanup_old_jobs()
+    return {"ok": True}
+
+
+@app.post("/api/info")
+def info(payload: InfoRequest):
+    cleanup_old_jobs()
+    cmd = base_ydl_args() + ["--dump-single-json", "--skip-download", str(payload.url)]
+    try:
+        data = run_json(cmd)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    formats = data.get("formats") or []
+    heights = sorted({int(f["height"]) for f in formats if f.get("height") and f.get("vcodec") != "none"}, reverse=True)
+    fps_by_height = {}
+    for h in heights:
+        fps = [float(f.get("fps") or 0) for f in formats if f.get("height") == h and f.get("vcodec") != "none"]
+        fps_by_height[str(h)] = round(max(fps), 2) if fps else None
+
+    return {
+        "id": data.get("id"),
+        "title": data.get("title"),
+        "uploader": data.get("uploader"),
+        "duration": data.get("duration"),
+        "thumbnail": data.get("thumbnail"),
+        "heights": heights,
+        "fps": fps_by_height,
+    }
+
+
+def set_job(job_id: str, **updates):
+    with LOCK:
+        if job_id in JOBS:
+            JOBS[job_id].update(updates)
+
+
+def find_final_source(workdir: Path) -> Path:
+    candidates = [p for p in workdir.iterdir() if p.is_file() and not p.name.endswith((".part", ".ytdl"))]
+    if not candidates:
+        raise RuntimeError("Downloaded source file was not found")
+    return max(candidates, key=lambda p: p.stat().st_size)
+
+
+def ffprobe(path: Path) -> dict:
+    return run_json([
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration,size:stream=codec_type,codec_name,width,height,r_frame_rate",
+        "-of", "json", str(path),
+    ])
+
+
+def download_job(job_id: str, req: DownloadRequest):
+    job_dir = ROOT / job_id
+    workdir = job_dir / "work"
+    workdir.mkdir(parents=True, exist_ok=True)
+    set_job(job_id, status="downloading", progress="Downloading source")
+
+    try:
+        url = str(req.url)
+        title_info = run_json(base_ydl_args() + ["--dump-single-json", "--skip-download", url])
+        title = sanitize_title(title_info.get("title") or "download")
+
+        output_template = str(workdir / "source.%(ext)s")
+        args = base_ydl_args() + ["-o", output_template]
+
+        if req.mode == "audio":
+            args += ["-f", "bestaudio/best", url]
+        elif req.mode == "video":
+            selector = f"bestvideo[height={req.height}]/bestvideo[height<={req.height}]" if req.height else "bestvideo"
+            args += ["-f", selector, "--merge-output-format", "mkv", url]
+        else:
+            selector = (
+                f"bestvideo[height={req.height}]+bestaudio/bestvideo[height<={req.height}]+bestaudio/best[height<={req.height}]"
+                if req.height else "bestvideo+bestaudio/best"
+            )
+            args += ["-f", selector, "--merge-output-format", "mkv", url]
+
+        proc = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=1200)
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stdout[-6000:])
+
+        source = find_final_source(workdir)
+        set_job(job_id, status="converting", progress="Preparing final file")
+
+        prefix = "[MP4]" if req.container == "mp4" else "[MOV]"
+        final_name = f"{prefix} {title}.{req.container}"
+        final_path = job_dir / final_name
+
+        if req.mode == "audio":
+            ff = [
+                "ffmpeg", "-y", "-i", str(source),
+                "-map", "0:a:0",
+                "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+                "-vn", "-movflags", "+faststart",
+                str(final_path),
+            ]
+            proc = subprocess.run(ff, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=1800)
+            if proc.returncode != 0:
+                raise RuntimeError(proc.stdout[-6000:])
+        else:
+            if req.ios_compatible:
+                if req.height and req.height >= 1440:
+                    vcodec = [
+                        "-c:v", "libx265",
+                        "-preset", "medium",
+                        "-crf", "20",
+                        "-pix_fmt", "yuv420p",
+                        "-tag:v", "hvc1",
+                    ]
+                else:
+                    vcodec = [
+                        "-c:v", "libx264",
+                        "-preset", "medium",
+                        "-crf", "18",
+                        "-pix_fmt", "yuv420p",
+                        "-profile:v", "high",
+                    ]
+                ff = ["ffmpeg", "-y", "-i", str(source), "-map", "0:v:0"]
+                if req.mode == "av":
+                    ff += ["-map", "0:a:0?", *vcodec, "-c:a", "aac", "-b:a", "192k", "-ar", "48000"]
+                else:
+                    ff += [*vcodec, "-an"]
+                ff += ["-movflags", "+faststart", str(final_path)]
+            else:
+                ff = ["ffmpeg", "-y", "-i", str(source), "-map", "0", "-c", "copy", "-movflags", "+faststart", str(final_path)]
+
+            proc = subprocess.run(ff, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=1800)
+            if proc.returncode != 0:
+                raise RuntimeError(proc.stdout[-6000:])
+
+        if not final_path.exists() or final_path.stat().st_size < 1024:
+            raise RuntimeError("Final output is missing or invalid")
+
+        probe = ffprobe(final_path)
+        video = next((s for s in probe.get("streams", []) if s.get("codec_type") == "video"), None)
+        if req.mode != "audio" and req.height and video and int(video.get("height") or 0) < req.height:
+            raise RuntimeError(f"Requested {req.height}p but output is {video.get('height')}p")
+
+        set_job(
+            job_id,
+            status="done",
+            progress="Done",
+            filename=final_name,
+            size=final_path.stat().st_size,
+            width=video.get("width") if video else None,
+            height=video.get("height") if video else None,
+            codec=video.get("codec_name") if video else None,
+        )
+        shutil.rmtree(workdir, ignore_errors=True)
+    except Exception as exc:
+        set_job(job_id, status="error", progress="Failed", error=str(exc)[-7000:])
+
+
+@app.post("/api/download")
+def start_download(req: DownloadRequest):
+    cleanup_old_jobs()
+    job_id = uuid.uuid4().hex
+    job_dir = ROOT / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    with LOCK:
+        JOBS[job_id] = {
+            "id": job_id,
+            "created": time.time(),
+            "status": "queued",
+            "progress": "Queued",
+        }
+    thread = threading.Thread(target=download_job, args=(job_id, req), daemon=True)
+    thread.start()
+    return {"job_id": job_id}
+
+
+@app.get("/api/status/{job_id}")
+def status(job_id: str):
+    cleanup_old_jobs()
+    with LOCK:
+        job = JOBS.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return dict(job)
+
+
+@app.get("/api/file/{job_id}")
+def file(job_id: str):
+    with LOCK:
+        job = JOBS.get(job_id)
+        if not job or job.get("status") != "done":
+            raise HTTPException(status_code=404, detail="File is not ready")
+        filename = job["filename"]
+    path = ROOT / job_id / filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="File expired")
+    media_type = "video/quicktime" if filename.lower().endswith(".mov") else "video/mp4"
+    return FileResponse(path, filename=filename, media_type=media_type)
