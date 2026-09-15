@@ -42,14 +42,38 @@ def run_json(cmd: list[str]) -> dict:
     return json.loads(proc.stdout)
 
 
-def base_ydl_args() -> list[str]:
-    return [
+def base_ydl_args(client: str | None = "mweb") -> list[str]:
+    args = [
         "yt-dlp",
         "--no-playlist",
         "--no-warnings",
         "--js-runtimes",
         "deno",
+        "--extractor-args",
+        "youtubepot-bgutilscript:server_home=/opt/bgutil-ytdlp-pot-provider/server",
     ]
+    if client:
+        args += ["--extractor-args", f"youtube:player_client={client}"]
+    return args
+
+
+YOUTUBE_CLIENTS = ("mweb", "web_safari", None)
+
+
+def run_youtube_json(extra_args: list[str]) -> tuple[dict, str]:
+    errors: list[str] = []
+    for client in YOUTUBE_CLIENTS:
+        try:
+            data = run_json(base_ydl_args(client) + extra_args)
+            return data, client or "default"
+        except Exception as exc:
+            label = client or "default"
+            errors.append(f"[{label}] {exc}")
+    raise RuntimeError("YouTube extraction failed after all client fallbacks:\n" + "\n\n".join(errors)[-9000:])
+
+
+def ydl_args_for_client(client: str | None) -> list[str]:
+    return base_ydl_args(client)
 
 
 def sanitize_title(value: str) -> str:
@@ -72,15 +96,20 @@ class DownloadRequest(BaseModel):
 @app.get("/api/health")
 def health():
     cleanup_old_jobs()
-    return {"ok": True}
+    return {
+        "ok": True,
+        "chromium": shutil.which("chromium") is not None,
+        "deno": shutil.which("deno") is not None,
+        "po_token_provider": "bgutil",
+        "youtube_clients": ["mweb", "web_safari", "default"],
+    }
 
 
 @app.post("/api/info")
 def info(payload: InfoRequest):
     cleanup_old_jobs()
-    cmd = base_ydl_args() + ["--dump-single-json", "--skip-download", str(payload.url)]
     try:
-        data = run_json(cmd)
+        data, client = run_youtube_json(["--dump-single-json", "--skip-download", str(payload.url)])
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
@@ -99,6 +128,8 @@ def info(payload: InfoRequest):
         "thumbnail": data.get("thumbnail"),
         "heights": heights,
         "fps": fps_by_height,
+        "youtube_client": client,
+        "po_token_provider": "bgutil",
     }
 
 
@@ -220,11 +251,12 @@ def download_job(job_id: str, req: DownloadRequest):
 
     try:
         url = str(req.url)
-        title_info = run_json(base_ydl_args() + ["--dump-single-json", "--skip-download", url])
+        title_info, selected_client = run_youtube_json(["--dump-single-json", "--skip-download", url])
         title = sanitize_title(title_info.get("title") or "download")
 
         output_template = str(workdir / "source.%(ext)s")
-        args = base_ydl_args() + ["-o", output_template]
+        args = ydl_args_for_client(None if selected_client == "default" else selected_client) + ["-o", output_template]
+        set_job(job_id, detail=f"YouTube client: {selected_client} • PO token: bgutil")
 
         if req.mode == "audio":
             args += ["-f", "bestaudio[acodec^=mp4a]/bestaudio/best", url]
