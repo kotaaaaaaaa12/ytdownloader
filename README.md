@@ -50,7 +50,7 @@ All finished downloads use only `.mp4` or `.mov`. Audio-only mode stores AAC aud
 
 ## Smart iOS mode
 
-When iOS Compatible is enabled, the downloader now prefers an H.264/HEVC source at the selected resolution. If the source is already H.264 or HEVC, FFmpeg copies the video stream and only prepares the final MP4/MOV and AAC audio. VP9/AV1 sources are transcoded only when necessary. 1440p/4K fallback conversion uses HEVC (`hvc1`) with the speed-first `ultrafast` preset. The container is pinned to APAC and uses `standard-4` (4 vCPU).
+When iOS Compatible is enabled, the downloader now prefers an H.264/HEVC source at the selected resolution. If the source is already H.264 or HEVC, FFmpeg copies the video stream and only prepares the final MP4/MOV and AAC audio. VP9/AV1 sources are transcoded only when necessary. VP9/AV1 fallback conversion now uses H.264 (`libx264`) with the `ultrafast` preset for maximum FFmpeg speed. This is faster than x265/HEVC but produces larger files. The container has no region constraint and uses `standard-4` (4 vCPU).
 
 ## YouTube PO Token / Chromium build
 
@@ -65,3 +65,7 @@ This build adds a current yt-dlp YouTube fallback stack:
 - `/api/health` reports whether Chromium and Deno are present.
 
 This deliberately does **not** automate Google sign-in or persist Google/YouTube session cookies. If YouTube blocks a datacenter IP even with PO tokens, changing clients/tokens cannot guarantee access.
+
+
+## Fast FFmpeg mode
+This build removes the APAC placement constraint, restores `standard-4`, and uses H.264 `libx264 -preset ultrafast` whenever a VP9/AV1 source must be transcoded for iOS compatibility. Compatible H.264/HEVC sources are still stream-copied without re-encoding.

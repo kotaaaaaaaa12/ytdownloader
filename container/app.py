@@ -330,30 +330,21 @@ def download_job(job_id: str, req: DownloadRequest):
                     )
                     label = "Preparing iOS file"
                 else:
-                    # Slow fallback: YouTube often exposes 1440p/4K as VP9/AV1 only.
-                    # Convert only when necessary, using all available CPU and a speed-first x265 preset.
-                    if req.height and req.height >= 1440:
-                        vcodec = [
-                            "-c:v", "libx265",
-                            "-preset", "ultrafast",
-                            "-crf", "23",
-                            "-pix_fmt", "yuv420p",
-                            "-tag:v", "hvc1",
-                            "-threads", "0",
-                        ]
-                    else:
-                        vcodec = [
-                            "-c:v", "libx264",
-                            "-preset", "veryfast",
-                            "-crf", "20",
-                            "-pix_fmt", "yuv420p",
-                            "-profile:v", "high",
-                            "-threads", "0",
-                        ]
+                    # Fast fallback: convert VP9/AV1 to H.264 with x264 ultrafast.
+                    # This produces larger files than HEVC, but is dramatically faster to encode
+                    # while remaining Apple/iOS friendly in MP4/MOV.
+                    vcodec = [
+                        "-c:v", "libx264",
+                        "-preset", "ultrafast",
+                        "-crf", "22" if req.height and req.height >= 1440 else "20",
+                        "-pix_fmt", "yuv420p",
+                        "-profile:v", "high",
+                        "-threads", "0",
+                    ]
                     set_job(
                         job_id,
                         progress="Encoding iOS video — 0.0%",
-                        detail=f"Smart iOS: {source_codec.upper() or 'source'} requires video conversion",
+                        detail=f"Smart iOS Fast: converting {source_codec.upper() or 'source'} to H.264 with x264 ultrafast",
                     )
                     label = "Encoding iOS video"
 

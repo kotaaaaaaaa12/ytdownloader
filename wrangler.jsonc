@@ -18,12 +18,7 @@
       "class_name": "DownloaderContainer",
       "image": "./container/Dockerfile",
       "max_instances": 1,
-      "instance_type": "standard-3",
-      "constraints": {
-        "regions": [
-          "APAC"
-        ]
-      }
+      "instance_type": "standard-4"
     }
   ],
   "durable_objects": {
