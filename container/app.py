@@ -10,9 +10,11 @@ import uuid
 from pathlib import Path
 from typing import Literal
 from urllib.parse import quote
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, HttpUrl
 
 app = FastAPI(docs_url=None, redoc_url=None)
@@ -103,6 +105,43 @@ def health():
         "po_token_provider": "bgutil",
         "youtube_clients": ["mweb", "web_safari", "default"],
     }
+
+
+@app.get("/api/thumbnail/{video_id}")
+def thumbnail(video_id: str):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        raise HTTPException(status_code=400, detail="Invalid video ID")
+
+    candidates = [
+        f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg",
+        f"https://i.ytimg.com/vi/{video_id}/sddefault.jpg",
+        f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+    ]
+    headers = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1",
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "Referer": "https://www.youtube.com/",
+    }
+
+    for image_url in candidates:
+        try:
+            req = Request(image_url, headers=headers)
+            with urlopen(req, timeout=12) as res:
+                data = res.read()
+                content_type = res.headers.get("Content-Type", "image/jpeg")
+                if data and content_type.startswith("image/"):
+                    return Response(
+                        content=data,
+                        media_type=content_type,
+                        headers={
+                            "Cache-Control": "public, max-age=86400",
+                            "X-Thumbnail-Source": image_url,
+                        },
+                    )
+        except (HTTPError, URLError, TimeoutError, OSError):
+            continue
+
+    raise HTTPException(status_code=404, detail="Thumbnail unavailable")
 
 
 @app.post("/api/info")

@@ -32,7 +32,25 @@ load.addEventListener('click', async()=>{
     const r=await apiFetch('/api/info',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url:url.value.trim()})});
     const body=await r.json(); if(!r.ok) throw new Error(body.detail||'Failed to load media information');
     info=body; title.textContent=body.title||'Untitled'; meta.textContent=[body.uploader,fmtDuration(body.duration)].filter(Boolean).join(' • ');
-    if(body.thumbnail){thumb.src=body.thumbnail;thumb.style.display='block'} else thumb.style.display='none';
+    if(body.id){
+      thumb.style.display='block';
+      thumb.alt=body.title?`${body.title} thumbnail`:'Video thumbnail';
+      thumb.onerror=()=>{
+        if(body.thumbnail && thumb.src!==body.thumbnail){
+          thumb.onerror=()=>{thumb.style.display='none'};
+          thumb.src=body.thumbnail;
+        }else{
+          thumb.style.display='none';
+        }
+      };
+      thumb.src=`/api/thumbnail/${encodeURIComponent(body.id)}?v=1`;
+    } else if(body.thumbnail){
+      thumb.style.display='block';
+      thumb.onerror=()=>{thumb.style.display='none'};
+      thumb.src=body.thumbnail;
+    } else {
+      thumb.style.display='none';
+    }
     media.classList.remove('hidden'); quality.innerHTML='';
     for(const h of body.heights){ const o=document.createElement('option'); o.value=String(h); const fps=body.fps?.[String(h)]; o.textContent=`${h}p${fps?` / up to ${fps} FPS`:''}`; quality.append(o); }
     download.disabled=false;
