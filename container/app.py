@@ -227,15 +227,35 @@ def download_job(job_id: str, req: DownloadRequest):
         args = base_ydl_args() + ["-o", output_template]
 
         if req.mode == "audio":
-            args += ["-f", "bestaudio/best", url]
+            args += ["-f", "bestaudio[acodec^=mp4a]/bestaudio/best", url]
         elif req.mode == "video":
-            selector = f"bestvideo[height={req.height}]/bestvideo[height<={req.height}]" if req.height else "bestvideo"
+            if req.height and req.ios_compatible:
+                selector = (
+                    f"bestvideo[height={req.height}][vcodec^=avc1]/"
+                    f"bestvideo[height={req.height}][vcodec^=hvc1]/"
+                    f"bestvideo[height={req.height}][vcodec^=hev1]/"
+                    f"bestvideo[height={req.height}]/"
+                    f"bestvideo[height<={req.height}]"
+                )
+            else:
+                selector = f"bestvideo[height={req.height}]/bestvideo[height<={req.height}]" if req.height else "bestvideo"
             args += ["-f", selector, "--merge-output-format", "mkv", url]
         else:
-            selector = (
-                f"bestvideo[height={req.height}]+bestaudio/bestvideo[height<={req.height}]+bestaudio/best[height<={req.height}]"
-                if req.height else "bestvideo+bestaudio/best"
-            )
+            if req.height and req.ios_compatible:
+                selector = (
+                    f"bestvideo[height={req.height}][vcodec^=avc1]+bestaudio[acodec^=mp4a]/"
+                    f"bestvideo[height={req.height}][vcodec^=avc1]+bestaudio/"
+                    f"bestvideo[height={req.height}][vcodec^=hvc1]+bestaudio/"
+                    f"bestvideo[height={req.height}][vcodec^=hev1]+bestaudio/"
+                    f"bestvideo[height={req.height}]+bestaudio/"
+                    f"bestvideo[height<={req.height}]+bestaudio/"
+                    f"best[height<={req.height}]"
+                )
+            else:
+                selector = (
+                    f"bestvideo[height={req.height}]+bestaudio/bestvideo[height<={req.height}]+bestaudio/best[height<={req.height}]"
+                    if req.height else "bestvideo+bestaudio/best"
+                )
             args += ["-f", selector, "--merge-output-format", "mkv", url]
 
         run_ytdlp_with_progress(job_id, args)
@@ -260,29 +280,57 @@ def download_job(job_id: str, req: DownloadRequest):
             run_ffmpeg_with_progress(job_id, ff, source_duration, "Preparing final file")
         else:
             if req.ios_compatible:
-                if req.height and req.height >= 1440:
-                    vcodec = [
-                        "-c:v", "libx265",
-                        "-preset", "fast",
-                        "-crf", "20",
-                        "-pix_fmt", "yuv420p",
-                        "-tag:v", "hvc1",
-                    ]
-                else:
-                    vcodec = [
-                        "-c:v", "libx264",
-                        "-preset", "fast",
-                        "-crf", "18",
-                        "-pix_fmt", "yuv420p",
-                        "-profile:v", "high",
-                    ]
+                source_video = next((x for x in source_probe.get("streams", []) if x.get("codec_type") == "video"), None)
+                source_codec = (source_video or {}).get("codec_name", "").lower()
+                can_copy_video = source_codec in {"h264", "hevc"}
+
                 ff = ["ffmpeg", "-y", "-i", str(source), "-map", "0:v:0"]
+
+                if can_copy_video:
+                    # Fast path: keep an already Apple-friendly video stream and only fix the container/audio.
+                    vcodec = ["-c:v", "copy"]
+                    if source_codec == "hevc":
+                        vcodec += ["-tag:v", "hvc1"]
+                    set_job(
+                        job_id,
+                        progress="Preparing iOS file — 0.0%",
+                        detail=f"Smart iOS: copying {source_codec.upper()} video (no video re-encode)",
+                    )
+                    label = "Preparing iOS file"
+                else:
+                    # Slow fallback: YouTube often exposes 1440p/4K as VP9/AV1 only.
+                    # Convert only when necessary, using all available CPU and a speed-first x265 preset.
+                    if req.height and req.height >= 1440:
+                        vcodec = [
+                            "-c:v", "libx265",
+                            "-preset", "ultrafast",
+                            "-crf", "23",
+                            "-pix_fmt", "yuv420p",
+                            "-tag:v", "hvc1",
+                            "-threads", "0",
+                        ]
+                    else:
+                        vcodec = [
+                            "-c:v", "libx264",
+                            "-preset", "veryfast",
+                            "-crf", "20",
+                            "-pix_fmt", "yuv420p",
+                            "-profile:v", "high",
+                            "-threads", "0",
+                        ]
+                    set_job(
+                        job_id,
+                        progress="Encoding iOS video — 0.0%",
+                        detail=f"Smart iOS: {source_codec.upper() or 'source'} requires video conversion",
+                    )
+                    label = "Encoding iOS video"
+
                 if req.mode == "av":
                     ff += ["-map", "0:a:0?", *vcodec, "-c:a", "aac", "-b:a", "192k", "-ar", "48000"]
                 else:
                     ff += [*vcodec, "-an"]
                 ff += ["-movflags", "+faststart", str(final_path)]
-                run_ffmpeg_with_progress(job_id, ff, source_duration, "Encoding final file")
+                run_ffmpeg_with_progress(job_id, ff, source_duration, label)
             else:
                 ff = ["ffmpeg", "-y", "-i", str(source), "-map", "0", "-c", "copy", "-movflags", "+faststart", str(final_path)]
                 run_ffmpeg_with_progress(job_id, ff, source_duration, "Remuxing final file")
