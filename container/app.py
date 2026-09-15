@@ -306,7 +306,7 @@ def download_job(job_id: str, req: DownloadRequest):
                 "ffmpeg", "-y", "-i", str(source),
                 "-map", "0:a:0",
                 "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
-                "-vn", "-movflags", "+faststart",
+                "-vn",
                 str(final_path),
             ]
             run_ffmpeg_with_progress(job_id, ff, source_duration, "Preparing final file")
@@ -336,7 +336,8 @@ def download_job(job_id: str, req: DownloadRequest):
                     vcodec = [
                         "-c:v", "libx264",
                         "-preset", "ultrafast",
-                        "-crf", "22" if req.height and req.height >= 1440 else "20",
+                        "-tune", "zerolatency",
+                        "-crf", "18",
                         "-pix_fmt", "yuv420p",
                         "-profile:v", "high",
                         "-threads", "0",
@@ -344,7 +345,7 @@ def download_job(job_id: str, req: DownloadRequest):
                     set_job(
                         job_id,
                         progress="Encoding iOS video — 0.0%",
-                        detail=f"Smart iOS Fast: converting {source_codec.upper() or 'source'} to H.264 with x264 ultrafast",
+                        detail=f"Smart iOS Fast HQ: converting {source_codec.upper() or 'source'} to H.264 • ultrafast • CRF 18",
                     )
                     label = "Encoding iOS video"
 
@@ -352,10 +353,10 @@ def download_job(job_id: str, req: DownloadRequest):
                     ff += ["-map", "0:a:0?", *vcodec, "-c:a", "aac", "-b:a", "192k", "-ar", "48000"]
                 else:
                     ff += [*vcodec, "-an"]
-                ff += ["-movflags", "+faststart", str(final_path)]
+                ff += [str(final_path)]
                 run_ffmpeg_with_progress(job_id, ff, source_duration, label)
             else:
-                ff = ["ffmpeg", "-y", "-i", str(source), "-map", "0", "-c", "copy", "-movflags", "+faststart", str(final_path)]
+                ff = ["ffmpeg", "-y", "-i", str(source), "-map", "0", "-c", "copy", str(final_path)]
                 run_ffmpeg_with_progress(job_id, ff, source_duration, "Remuxing final file")
 
         if not final_path.exists() or final_path.stat().st_size < 1024:

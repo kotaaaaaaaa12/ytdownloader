@@ -69,3 +69,8 @@ This deliberately does **not** automate Google sign-in or persist Google/YouTube
 
 ## Fast FFmpeg mode
 This build removes the APAC placement constraint, restores `standard-4`, and uses H.264 `libx264 -preset ultrafast` whenever a VP9/AV1 source must be transcoded for iOS compatibility. Compatible H.264/HEVC sources are still stream-copied without re-encoding.
+
+
+## Fast HQ tuning
+
+This build keeps the selected resolution and FPS, uses H.264 x264 ultrafast with CRF 18 when re-encoding is unavoidable, and omits MP4/MOV faststart relocation because files are downloaded only after completion. This reduces avoidable finalization work while keeping visually high quality.
