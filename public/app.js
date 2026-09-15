@@ -1,3 +1,16 @@
+async function apiFetch(url, options = {}) {
+  const res = await fetch(url, options);
+  if (res.status === 503) {
+    let data = {};
+    try { data = await res.clone().json(); } catch {}
+    const msg = data.retryable
+      ? "APAC container is warming up or temporarily unavailable. Retrying may succeed shortly."
+      : (data.error || "Service temporarily unavailable.");
+    throw new Error(msg);
+  }
+  return res;
+}
+
 const $ = (id) => document.getElementById(id);
 const url = $('url'), load = $('load'), mode = $('mode'), quality = $('quality');
 const container = $('container'), ios = $('ios'), download = $('download');
@@ -16,7 +29,7 @@ mode.addEventListener('change', syncMode); syncMode();
 load.addEventListener('click', async()=>{
   showError(); fileLink.classList.add('hidden'); download.disabled=true; load.disabled=true; load.textContent='Loading…';
   try{
-    const r=await fetch('/api/info',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url:url.value.trim()})});
+    const r=await apiFetch('/api/info',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url:url.value.trim()})});
     const body=await r.json(); if(!r.ok) throw new Error(body.detail||'Failed to load media information');
     info=body; title.textContent=body.title||'Untitled'; meta.textContent=[body.uploader,fmtDuration(body.duration)].filter(Boolean).join(' • ');
     if(body.thumbnail){thumb.src=body.thumbnail;thumb.style.display='block'} else thumb.style.display='none';
@@ -31,7 +44,7 @@ download.addEventListener('click', async()=>{
   showError(); fileLink.classList.add('hidden'); download.disabled=true; status.classList.remove('hidden'); statusText.textContent='Starting…'; statusDetail.textContent=''; barFill.style.width='0%'; barFill.textContent='';
   try{
     const payload={url:url.value.trim(),mode:mode.value,height:mode.value==='audio'?null:Number(quality.value||0)||null,container:container.value,ios_compatible:ios.checked};
-    const r=await fetch('/api/download',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)}); const body=await r.json(); if(!r.ok) throw new Error(body.detail||'Could not start');
+    const r=await apiFetch('/api/download',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)}); const body=await r.json(); if(!r.ok) throw new Error(body.detail||'Could not start');
     const id=body.job_id;
     while(true){
       await new Promise(res=>setTimeout(res,1500));
