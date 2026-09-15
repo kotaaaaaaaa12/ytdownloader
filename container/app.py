@@ -123,11 +123,100 @@ def ffprobe(path: Path) -> dict:
     ])
 
 
+def parse_percent(text: str) -> float | None:
+    match = re.search(r"(\d+(?:\.\d+)?)%", text)
+    if not match:
+        return None
+    try:
+        return max(0.0, min(100.0, float(match.group(1))))
+    except ValueError:
+        return None
+
+
+def run_ytdlp_with_progress(job_id: str, args: list[str]):
+    cmd = args[:-1] + [
+        "--newline",
+        "--progress-template", "download:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s",
+        args[-1],
+    ]
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    tail: list[str] = []
+    assert proc.stdout is not None
+    for raw in proc.stdout:
+        line = raw.strip()
+        if not line:
+            continue
+        tail.append(line)
+        tail = tail[-120:]
+        if line.startswith("download:"):
+            payload = line[len("download:"):]
+            parts = payload.split("|")
+            percent = parse_percent(parts[0])
+            if percent is not None:
+                speed = parts[1].strip() if len(parts) > 1 else ""
+                eta = parts[2].strip() if len(parts) > 2 else ""
+                details = " • ".join(x for x in (speed, f"ETA {eta}" if eta and eta != "NA" else "") if x and x != "NA")
+                set_job(
+                    job_id,
+                    status="downloading",
+                    progress=f"Downloading source — {percent:.1f}%",
+                    stage_percent=percent,
+                    percent=round(percent * 0.70, 1),
+                    detail=details,
+                )
+    code = proc.wait()
+    if code != 0:
+        raise RuntimeError("\n".join(tail)[-7000:])
+
+
+def run_ffmpeg_with_progress(job_id: str, cmd: list[str], duration: float, label: str):
+    progress_cmd = cmd[:-1] + ["-progress", "pipe:1", "-nostats", cmd[-1]]
+    proc = subprocess.Popen(
+        progress_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    tail: list[str] = []
+    assert proc.stdout is not None
+    for raw in proc.stdout:
+        line = raw.strip()
+        if not line:
+            continue
+        tail.append(line)
+        tail = tail[-160:]
+        if line.startswith("out_time_ms=") or line.startswith("out_time_us="):
+            try:
+                value = int(line.split("=", 1)[1])
+                seconds = value / 1_000_000
+                stage = 0.0 if duration <= 0 else max(0.0, min(99.5, seconds / duration * 100))
+                set_job(
+                    job_id,
+                    status="converting",
+                    progress=f"{label} — {stage:.1f}%",
+                    stage_percent=round(stage, 1),
+                    percent=round(70 + stage * 0.29, 1),
+                    detail=f"{seconds:.0f}s / {duration:.0f}s" if duration > 0 else "",
+                )
+            except (ValueError, ZeroDivisionError):
+                pass
+    code = proc.wait()
+    if code != 0:
+        raise RuntimeError("\n".join(tail)[-7000:])
+
+
 def download_job(job_id: str, req: DownloadRequest):
     job_dir = ROOT / job_id
     workdir = job_dir / "work"
     workdir.mkdir(parents=True, exist_ok=True)
-    set_job(job_id, status="downloading", progress="Downloading source")
+    set_job(job_id, status="downloading", progress="Starting download", stage_percent=0, percent=0, detail="")
 
     try:
         url = str(req.url)
@@ -149,12 +238,12 @@ def download_job(job_id: str, req: DownloadRequest):
             )
             args += ["-f", selector, "--merge-output-format", "mkv", url]
 
-        proc = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=1200)
-        if proc.returncode != 0:
-            raise RuntimeError(proc.stdout[-6000:])
+        run_ytdlp_with_progress(job_id, args)
 
         source = find_final_source(workdir)
-        set_job(job_id, status="converting", progress="Preparing final file")
+        source_probe = ffprobe(source)
+        source_duration = float(source_probe.get("format", {}).get("duration") or title_info.get("duration") or 0)
+        set_job(job_id, status="converting", progress="Preparing final file — 0.0%", stage_percent=0, percent=70, detail="Starting FFmpeg")
 
         prefix = "[MP4]" if req.container == "mp4" else "[MOV]"
         final_name = f"{prefix} {title}.{req.container}"
@@ -168,15 +257,13 @@ def download_job(job_id: str, req: DownloadRequest):
                 "-vn", "-movflags", "+faststart",
                 str(final_path),
             ]
-            proc = subprocess.run(ff, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=1800)
-            if proc.returncode != 0:
-                raise RuntimeError(proc.stdout[-6000:])
+            run_ffmpeg_with_progress(job_id, ff, source_duration, "Preparing final file")
         else:
             if req.ios_compatible:
                 if req.height and req.height >= 1440:
                     vcodec = [
                         "-c:v", "libx265",
-                        "-preset", "medium",
+                        "-preset", "fast",
                         "-crf", "20",
                         "-pix_fmt", "yuv420p",
                         "-tag:v", "hvc1",
@@ -184,7 +271,7 @@ def download_job(job_id: str, req: DownloadRequest):
                 else:
                     vcodec = [
                         "-c:v", "libx264",
-                        "-preset", "medium",
+                        "-preset", "fast",
                         "-crf", "18",
                         "-pix_fmt", "yuv420p",
                         "-profile:v", "high",
@@ -195,12 +282,10 @@ def download_job(job_id: str, req: DownloadRequest):
                 else:
                     ff += [*vcodec, "-an"]
                 ff += ["-movflags", "+faststart", str(final_path)]
+                run_ffmpeg_with_progress(job_id, ff, source_duration, "Encoding final file")
             else:
                 ff = ["ffmpeg", "-y", "-i", str(source), "-map", "0", "-c", "copy", "-movflags", "+faststart", str(final_path)]
-
-            proc = subprocess.run(ff, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=1800)
-            if proc.returncode != 0:
-                raise RuntimeError(proc.stdout[-6000:])
+                run_ffmpeg_with_progress(job_id, ff, source_duration, "Remuxing final file")
 
         if not final_path.exists() or final_path.stat().st_size < 1024:
             raise RuntimeError("Final output is missing or invalid")
@@ -214,6 +299,9 @@ def download_job(job_id: str, req: DownloadRequest):
             job_id,
             status="done",
             progress="Done",
+            stage_percent=100,
+            percent=100,
+            detail="",
             filename=final_name,
             size=final_path.stat().st_size,
             width=video.get("width") if video else None,

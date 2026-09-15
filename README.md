@@ -40,3 +40,10 @@ YouTube may still challenge or block datacenter IP addresses. Moving yt-dlp from
 All finished downloads use only `.mp4` or `.mov`. Audio-only mode stores AAC audio inside the selected MP4/MOV container.
 
 4K iOS-compatible mode converts 1440p/2160p video to HEVC (`hvc1`) with AAC. 1080p and lower use H.264 + AAC.
+
+## Progress and placement
+
+- The progress bar now follows real yt-dlp download percentage and FFmpeg output time.
+- Container placement is restricted to the Cloudflare `APAC` region.
+- The container uses `standard-3` (2 vCPU / 8 GiB RAM / 16 GB disk) to speed up video encoding.
+- 1440p/4K iOS-compatible output uses HEVC (`hvc1`) with FFmpeg `fast` preset.

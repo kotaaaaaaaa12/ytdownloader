@@ -9,14 +9,21 @@
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": [
+      "/api/*"
+    ]
   },
   "containers": [
     {
       "class_name": "DownloaderContainer",
       "image": "./container/Dockerfile",
       "max_instances": 1,
-      "instance_type": "standard-2"
+      "instance_type": "standard-3",
+      "constraints": {
+        "regions": [
+          "APAC"
+        ]
+      }
     }
   ],
   "durable_objects": {
@@ -30,7 +37,9 @@
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": ["DownloaderContainer"]
+      "new_sqlite_classes": [
+        "DownloaderContainer"
+      ]
     }
   ]
 }

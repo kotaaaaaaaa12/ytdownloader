@@ -3,7 +3,7 @@ const url = $('url'), load = $('load'), mode = $('mode'), quality = $('quality')
 const container = $('container'), ios = $('ios'), download = $('download');
 const media = $('media'), thumb = $('thumb'), title = $('title'), meta = $('meta');
 const status = $('status'), statusText = $('statusText'), statusDetail = $('statusDetail');
-const fileLink = $('fileLink'), error = $('error');
+const fileLink = $('fileLink'), error = $('error'), barFill = $('barFill');
 const qualityField = $('qualityField'), containerField = $('containerField'), iosField = $('iosField');
 let info = null;
 
@@ -28,7 +28,7 @@ load.addEventListener('click', async()=>{
 });
 
 download.addEventListener('click', async()=>{
-  showError(); fileLink.classList.add('hidden'); download.disabled=true; status.classList.remove('hidden'); statusText.textContent='Starting…'; statusDetail.textContent='';
+  showError(); fileLink.classList.add('hidden'); download.disabled=true; status.classList.remove('hidden'); statusText.textContent='Starting…'; statusDetail.textContent=''; barFill.style.width='0%'; barFill.textContent='';
   try{
     const payload={url:url.value.trim(),mode:mode.value,height:mode.value==='audio'?null:Number(quality.value||0)||null,container:container.value,ios_compatible:ios.checked};
     const r=await fetch('/api/download',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)}); const body=await r.json(); if(!r.ok) throw new Error(body.detail||'Could not start');
@@ -36,9 +36,13 @@ download.addEventListener('click', async()=>{
     while(true){
       await new Promise(res=>setTimeout(res,1500));
       const sr=await fetch(`/api/status/${id}`); const job=await sr.json(); if(!sr.ok) throw new Error(job.detail||'Job disappeared');
-      statusText.textContent=job.progress||job.status; statusDetail.textContent=job.size?fmtSize(job.size):'';
+      statusText.textContent=job.progress||job.status;
+      const pct=Math.max(0,Math.min(100,Number(job.percent)||0));
+      barFill.style.width=`${pct}%`;
+      statusDetail.textContent=job.detail||`${pct.toFixed(1)}%`;
       if(job.status==='error') throw new Error(job.error||'Download failed');
       if(job.status==='done'){
+        barFill.style.width='100%';
         statusText.textContent='Done'; statusDetail.textContent=[job.width&&job.height?`${job.width}×${job.height}`:'',job.codec||'',fmtSize(job.size)].filter(Boolean).join(' • ');
         fileLink.href=`/api/file/${id}`; fileLink.textContent=`Download ${job.filename}`; fileLink.classList.remove('hidden'); break;
       }
