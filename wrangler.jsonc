@@ -6,6 +6,24 @@
   "observability": {
     "enabled": true
   },
+  "ratelimits": [
+    {
+      "name": "INFO_RATE_LIMITER",
+      "namespace_id": "2026092801",
+      "simple": {
+        "limit": 20,
+        "period": 60
+      }
+    },
+    {
+      "name": "DOWNLOAD_RATE_LIMITER",
+      "namespace_id": "2026092802",
+      "simple": {
+        "limit": 4,
+        "period": 60
+      }
+    }
+  ],
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
