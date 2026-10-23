@@ -36,7 +36,7 @@
       "class_name": "DownloaderContainer",
       "image": "./container/Dockerfile",
       "max_instances": 1,
-      "instance_type": "standard-4"
+      "instance_type": "standard-1"
     }
   ],
   "durable_objects": {
